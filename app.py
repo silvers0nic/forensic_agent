@@ -132,7 +132,7 @@ SAMPLES_DIR = PROJECT_ROOT / "samples"
 SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
 
 # discover existing images
-valid_exts = {".raw", ".mem", ".img", ".dmp", ".bin"}
+valid_exts = {".raw", ".mem", ".img", ".dmp", ".bin", ".vmem"}
 existing_images = sorted(
     [p for p in SAMPLES_DIR.glob("*") if p.suffix.lower() in valid_exts],
     key=lambda p: p.name.lower()
@@ -484,106 +484,94 @@ with col2:
                 st.markdown("### stderr")
                 st.code(err, language="bash")
 
-# 💡 append to history (store time, image, question, and a compact answer)
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            compact_ans = out.strip()
-            if len(compact_ans) > 1200:
-                compact_ans = compact_ans[:1200] + "…"
-            entry = {
-                "time": ts,
-                "image": Path(img_path).name if img_path else "(none)",
-                "q": question.strip(),
-                "ans": compact_ans,
-                "rc": rc,
-            }
-            if "qa_history" in st.session_state:
-                st.session_state.qa_history.append(entry)
-            else:
-                st.session_state.qa_history = [entry]
-
-    st.markdown("### 🧾 Recent questions")
-    if st.session_state.qa_history:
-        # newest first, last 5
-        for item in st.session_state.qa_history[-5:][::-1]:
-            st.markdown(
-                f"**{item['time']}** — `{item['image']}`  \n"
-                f"**Q:** {item['q']}  \n"
-                f"**A (excerpt):**\n\n> {item['ans']}"
-            )
-        # optional: clear button
-        if st.button("Clear history"):
-            st.session_state.qa_history = []
-            st.success("History cleared.")
-    else:
-        st.caption("_No questions asked yet in this session._")
-
 st.divider()
 st.subheader("Volatility Command Output")
 
-COMMON_PLUGINS = [
-    "windows.info",
-    "windows.pslist",
-    "windows.pstree",
-    "windows.psscan",
-    "windows.cmdline",
-    "windows.netscan",
-    "windows.dlllist",
-    "windows.svcscan",
-    "windows.filescan",
-    "windows.malfind",
-    "windows.netstat",
-]
-
 with st.container():
-    plugin_cmd = st.selectbox("Select a plugin", options=COMMON_PLUGINS, index=0)
-    extra_args = st.text_input("Extra plugin arguments (optional)", placeholder="e.g., --physical or --dump")
-    renderer = st.selectbox("Renderer", options=["text", "json"], index=0)  # 👈 choose output style
-    also_index = st.toggle("Also index results into Chroma (uses main.py index)", value=True)
+    vol_args = st.text_input(
+        "Volatility arguments (everything after `-f <image>`)",
+        placeholder="e.g. windows.malfind --pid 1068 --dump",
+    )
+
+    also_index = st.toggle(
+        "Also index results into Chroma (uses main.py index)",
+        value=True,
+    )
 
     if st.button("Run Volatility"):
         if not img_path or not Path(img_path).exists():
             st.error("Image path not found. Please set or select a valid image in the Index panel.")
+        elif not vol_args.strip():
+            st.error("Please enter a Volatility command/arguments.")
         else:
-            # Always show a human preview first (text or JSON),
-            # then optionally index via your CLI so chunks go into Chroma.
+            # Resolve vol.exe (prefer venv, fallback to system PATH)
             venv_vol = os.path.join(".venv", "Scripts", "vol.exe")
             vol = venv_vol if os.path.exists(venv_vol) else which("vol") or "vol"
 
+            # Build command exactly like CLI:
+            # vol.exe -f <image> <user arguments>
+            import shlex
             cmd = [vol, "-f", img_path]
-            if renderer == "json":
-                cmd += ["-r", "json"]  # JSON for neat DataFrame parsing
-            cmd += [plugin_cmd]
-            if extra_args.strip():
-                cmd.extend(extra_args.split())
+            try:
+                # posix=False so Windows-style quoting works better
+                cmd += shlex.split(vol_args, posix=False)
+            except ValueError as e:
+                st.error(f"Failed to parse arguments: {e}")
+                st.stop()
 
-            with st.spinner(f"Running `{plugin_cmd}`…"):
-                proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            with st.spinner(f"Running: {' '.join(cmd)}"):
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
                 rc = proc.returncode
                 out = proc.stdout or ""
                 err = proc.stderr or ""
 
             st.write(f"**Exit code:** {rc}")
+            st.write("**Command:**")
+            st.code(" ".join(cmd))
 
-            if out.strip():
-                st.markdown("### stdout")
-                if renderer == "json":
-                    # Show raw JSON for transparency
-                    st.code(out, language="json")
-                    # And also a tidy table view
-                    parsed = try_parse_vol_json(out)
-                    df = rows_to_df(parsed)
-                    if not df.empty:
-                        st.markdown("### Structured Table View")
-                        st.dataframe(df, use_container_width=True, height=360)
-                    else:
-                        st.caption("_No tabular rows parsed from JSON output._")
-                else:
-                    # text renderer → show as monospace for alignment
-                    st.code(out, language="bash")
+            if out:
+                st.subheader("Stdout")
+                st.code(out)
 
-            if err.strip():
-                st.markdown("### stderr")
-                st.code(err, language="bash")
+            if err:
+                st.subheader("Stderr")
+                st.code(err)
+
+            # Optional: hook your indexing here if you still want it
+            if also_index and out:
+                # Example: write to a temp file and call your indexer
+                # (Adjust paths/names to match your main.py interface.)
+                tmp_path = Path("vol_output_latest.txt")
+                tmp_path.write_text(out, encoding="utf-8")
+
+                st.info(f"Indexing Volatility output from {tmp_path} into Chroma…")
+                idx_cmd = [
+                    sys.executable,
+                    "main.py",
+                    "index",
+                    "-f",
+                    str(tmp_path),
+                ]
+                idx_proc = subprocess.run(
+                    idx_cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                st.write("**Indexer exit code:**", idx_proc.returncode)
+                if idx_proc.stdout:
+                    st.subheader("Indexer stdout")
+                    st.code(idx_proc.stdout)
+                if idx_proc.stderr:
+                    st.subheader("Indexer stderr")
+                    st.code(idx_proc.stderr)
 
             if also_index:
                 # Route through your CLI to persist into Chroma

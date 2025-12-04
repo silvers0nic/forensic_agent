@@ -27,10 +27,10 @@ MODEL_CHAT = "gpt-5"
 MODEL_EMBED = "text-embedding-3-small"
 
 CHUNK_MAX_LINES = 200              # chunk plugin output into <= this many lines
-CHUNK_MAX_CHARS = 6000             # and never exceed this many characters
+CHUNK_MAX_CHARS = 8000             # and never exceed this many characters
 RETRIEVE_TOP_K = 6                 # default number of chunks to retrieve
 VOL_TIMEOUT_SECONDS = 300          # per plugin
-MAX_CONTEXT_CHARS = 12000          # max total chars from retrieved chunks
+MAX_CONTEXT_CHARS = 36000          # max total chars from retrieved chunks
 VOL_RENDERER = "json"  # force Volatility output into JSON (safer encoding)
 
 # Default plugins
@@ -39,7 +39,7 @@ DEFAULT_PLUGINS = [
     ["windows.pslist", "--physical"],
     ["windows.cmdline"],
     ["windows.netscan"],
-    ["windows.driverscan"],
+    ["windows.dlllist"],
 ]
 
 # ======================
@@ -135,11 +135,17 @@ def build_chat_prompt(question: str, context_docs: List[dict]) -> List[dict]:
 
     context_blob = "\n\n".join(blocks) if blocks else "(no relevant context)"
     system = (
-        "You are a precise, cautious DFIR analyst. "
-        "Answer based ONLY on the provided memory forensics context. "
-        "If context is insufficient, say so and suggest the next Volatility step. "
-        "Cite sources inline as [Source <id>], and include a short 'Next steps' list."
-    )
+    "You are a precise DFIR analyst. "
+    "Based ONLY on the provided memory forensics context, do ALL of the following:\n"
+    "1) List any and all indicators that are suspicious or suggestive of compromise "
+    "(e.g., non-standard drivers, callbacks with null owners, RX/RWX regions, malfind hits).\n"
+    "2) For each indicator, explain WHY it is suspicious.\n"
+    "3) Then give an overall assessment: is there plausible evidence of suspicious or malicious behavior, "
+    "even if not 100% conclusive? Avoid saying 'no clear evidence' if there are strong suspicious indicators.\n"
+    "4) Include a short 'Next steps' list.\n"
+    "Never invent data not present in the context."
+)
+
     user = textwrap.dedent(f"""
     Question: {question}
 
