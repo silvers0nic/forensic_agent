@@ -30,7 +30,7 @@ CHUNK_MAX_LINES = 200              # chunk plugin output into <= this many lines
 CHUNK_MAX_CHARS = 8000             # and never exceed this many characters
 RETRIEVE_TOP_K = 6                 # default number of chunks to retrieve
 VOL_TIMEOUT_SECONDS = 300          # per plugin
-MAX_CONTEXT_CHARS = 36000          # max total chars from retrieved chunks
+MAX_CONTEXT_CHARS = 48000          # max total chars from retrieved chunks
 VOL_RENDERER = "json"  # force Volatility output into JSON (safer encoding)
 
 # Default plugins
